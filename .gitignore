@@ -1,0 +1,22 @@
+/data/**
+!/data/**/
+!/data/**/*_ocr.pkl
+
+
+results/
+plots/
+scratch*
+
+.env
+htr-icl-googlevision-key.json
+
+__pycache__/
+.vscode/
+
+*.egg-info
+
+build/
+
+.DS_Store # pixi environments
+.pixi/*
+!.pixi/config.toml
