@@ -1,0 +1,13 @@
+model: gemini-2.5-pro
+mllm_cache_path: gpt_cache_iam.db
+
+seed: 0
+
+dataset_dir: "IAM Handwriting DB"
+
+split: 0.23 ## .23*88=20
+
+ocr_engines:
+  - azure_ocr
+
+batch_api: False

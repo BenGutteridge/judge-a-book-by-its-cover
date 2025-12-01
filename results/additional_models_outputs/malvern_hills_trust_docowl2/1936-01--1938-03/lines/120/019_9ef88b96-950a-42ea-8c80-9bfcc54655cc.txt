@@ -1,0 +1,1 @@
+"What is the difference between the two lines? There is one line that is all uppercase letters and the other line that is all lowercase letters."

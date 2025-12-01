@@ -1,0 +1,1 @@
+The handwritten line is: "What is written above the handwritten line from a document page ? Transcribe the full text of the line accurately. Return all of the text in the line in reading order. Return only the transcribed text. Use correct capitalization."

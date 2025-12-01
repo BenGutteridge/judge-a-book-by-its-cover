@@ -1,0 +1,13 @@
+model: gpt-4o
+mllm_cache_path: gpt_cache_mhills.db
+
+seed: 0
+
+dataset_dir: malvern_hills_trust
+
+split: 1.0
+
+ocr_engines:
+  - azure_ocr
+
+batch_api: False

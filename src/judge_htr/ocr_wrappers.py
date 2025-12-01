@@ -18,7 +18,7 @@ from PIL import Image
 from loguru import logger
 
 
-def tesseract_img2txt(image_path: Path) -> str:
+def tesseract_img2txt(image_path: Path, lang: str = "eng") -> tuple[str, None]:
     """
     Extracts text from an image using Tesseract OCR.
 
@@ -29,7 +29,7 @@ def tesseract_img2txt(image_path: Path) -> str:
         str: The text extracted from the image.
     """
     img = Image.open(image_path)
-    return pytesseract.image_to_string(img)
+    return pytesseract.image_to_string(img, lang=lang), None  # no bboxes
 
 
 from google.cloud.vision_v1.types import EntityAnnotation

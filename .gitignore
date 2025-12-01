@@ -3,9 +3,13 @@
 !/data/**/*_ocr.pkl
 
 
-results/
+results/*
+!results/*_outputs/
+
 plots/
 scratch*
+cache/
+data_labeling/
 
 .env
 htr-icl-googlevision-key.json

@@ -1,0 +1,1 @@
+"What is the difference between a handwritten line and a printed line? Read the full text of the line accurately. Return all of the text in the line in reading order. Return only the transcribed text. Use correct capitalization."

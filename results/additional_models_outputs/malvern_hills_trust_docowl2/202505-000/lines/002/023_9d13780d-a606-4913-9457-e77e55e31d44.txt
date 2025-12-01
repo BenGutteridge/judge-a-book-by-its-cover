@@ -1,0 +1,1 @@
+For convenience and readability, the first letter of each line is displayed above the line.

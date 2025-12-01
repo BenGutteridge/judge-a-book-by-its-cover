@@ -1,0 +1,1 @@
+With the exception of the first word, the rest of the line is written in lowercase letters.
