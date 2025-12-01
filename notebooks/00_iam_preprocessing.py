@@ -24,6 +24,14 @@ ocr_engines = [
     "azure_ocr",
 ]
 
+# For IAM-5:
+min_page_count = 5
+precise_page_count = True
+
+# For IAM (original):
+# min_page_count = 2
+# precise_page_count = False
+
 # %% [markdown]
 # Get per-page information about author, etc
 
@@ -191,6 +199,10 @@ for engine in ocr_engines:
 for engine in ocr_engines:
     df[engine] = df["id"].apply(lambda x: ocr_outputs[engine][x])
 
+df["line_img_paths"] = df["id"].apply(
+    lambda x: list(sorted((data_dir / "lines" / x.split("-")[0] / x).glob("*.png")))
+)
+
 # %% [markdown]
 # Save the df
 df_filepath = data_dir / "iam.pkl"
@@ -226,13 +238,9 @@ plt.ylabel("Number of writers")
 #
 # Output used for downstream experiments and plot/table notebooks.
 
-dfmp = (
-    df.groupby("writer_id")[["gt", "img_path"] + ocr_engines]
-    .agg(lambda x: list(x))
-    .reset_index()
-)
+cols_to_keep = ["gt", "img_path", "line_img_paths"] + ocr_engines
+dfmp = df.groupby("writer_id")[cols_to_keep].agg(lambda x: list(x)).reset_index()
 
-min_page_count = 2
 
 logger.info(f"\nFinding docs with minimum {min_page_count} pages...")
 df = dfmp[
@@ -248,10 +256,8 @@ for i, row in df.iterrows():
         idxs[-1] += remainder
     for i, j in zip(idxs[:-1], idxs[1:]):
         new_row = row.copy()
-        new_row["gt"] = row["gt"][i:j]
-        new_row["img_path"] = row["img_path"][i:j]
-        for engine in ocr_engines:
-            new_row[engine] = row[engine][i:j]
+        for col in cols_to_keep:
+            new_row[col] = row[col][i:j]
         new_rows.append(new_row)
 
 df_multipage = pd.DataFrame(new_rows).reset_index(drop=True)
@@ -265,10 +271,82 @@ logger.info(
     f"{df_multipage['gt'].apply(len).value_counts()}"
 )
 
-df_filepath = data_dir / f"iam_multipage_minpages={min_page_count:02d}.pkl"
+if precise_page_count:
+    df_multipage = df_multipage[df_multipage["gt"].apply(len) == min_page_count]
+    logger.info(
+        f"\nAfter enforcing precise page count of {min_page_count}, new counts:\n"
+        f"{df_multipage['gt'].apply(len).value_counts()}"
+    )
+    filename = f"iam_multipage_exactpages={min_page_count:02d}.pkl"
+else:
+    filename = f"iam_multipage_minpages={min_page_count:02d}.pkl"
+
+df_filepath = data_dir / filename
 df_multipage.to_pickle(df_filepath)
 logger.info(
     f"\nSaved multipage df to {df_filepath} with minimum page count of {min_page_count}"
 )
 
-# %%
+import sys
+
+if not min_page_count == 2 and not precise_page_count:
+    sys.exit(0)
+
+# %% [markdown]
+# Make an IAM-random dataset that consists of docs of 5 pages, where NEITHER handwriting nor content overlap
+
+# Use WER to ensure no content overlap
+import evaluate
+import numpy as np
+
+cer = evaluate.load("cer")
+
+cer_score = lambda gt1, gt2: cer.compute(predictions=[gt1], references=[gt2])
+
+# Set seeds
+np.random.seed(42)
+
+random_docs = []
+specific_pages_included = set()
+while len(random_docs) < 20:
+    # randomly sample min_page_count writer IDs
+    random_doc = {"gt": [], "img_path": [], "azure_ocr": []}
+    sampled_writers = df["writer_id"].sample(min_page_count, replace=False).tolist()
+    for writer_id in sampled_writers:
+        writer_row = df[df["writer_id"] == writer_id]
+        # randomly sample a page from this writer
+        writer_pages = writer_row["gt"].iloc[0]
+        rand_int = np.random.randint(0, len(writer_pages))
+        sampled_page = writer_pages[rand_int]
+        sampled_page_img_path = writer_row["img_path"].iloc[0][rand_int]
+        sampled_page_ocr = writer_row["azure_ocr"].iloc[0][rand_int]
+        if sampled_page_img_path in specific_pages_included:
+            print("Page already included, resampling document...")
+            break
+        specific_pages_included.add(sampled_page_img_path)
+        random_doc["gt"].append(sampled_page)
+        random_doc["img_path"].append(sampled_page_img_path)
+        random_doc["azure_ocr"].append(sampled_page_ocr)
+    # check for gt content overlap between all pairs of pages in the random_doc
+    overlap = False
+    for i in range(len(random_doc["gt"])):
+        for j in range(i + 1, len(random_doc["gt"])):
+            similarity = cer_score(random_doc["gt"][i], random_doc["gt"][j])
+            if similarity < 0.5:
+                overlap = True
+                break
+        if overlap:
+            print("Content overlap detected, resampling...")
+            break
+    if not overlap and len(random_doc["gt"]) == min_page_count:
+        random_docs.append(random_doc)
+        print("Added random doc with no content overlap.")
+
+df_random = pd.DataFrame(random_docs)
+df_random["page_id"] = df_random["img_path"].apply(lambda x: list(range(1, len(x) + 1)))
+
+df_filepath = data_dir / f"iam_multipage_random_exactpages={min_page_count:02d}.pkl"
+df_random.to_pickle(df_filepath)
+logger.info(
+    f"\nSaved random multipage df to {df_filepath} with exact page count of {min_page_count}"
+)

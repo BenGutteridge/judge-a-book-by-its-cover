@@ -1,0 +1,13 @@
+model: gemini-2.5-pro
+mllm_cache_path: gpt_cache_casia.db
+
+seed: 0
+
+dataset_dir: CASIA
+
+split: 0.5
+
+ocr_engines:
+  - google_ocr
+
+batch_api: False

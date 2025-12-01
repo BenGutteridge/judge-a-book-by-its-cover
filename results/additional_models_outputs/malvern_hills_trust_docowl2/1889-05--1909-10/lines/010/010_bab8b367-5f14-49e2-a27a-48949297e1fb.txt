@@ -1,0 +1,1 @@
+What is the first letter of the word that appears at the end of the line?

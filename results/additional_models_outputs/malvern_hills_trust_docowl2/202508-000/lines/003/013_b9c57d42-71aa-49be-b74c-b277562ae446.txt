@@ -1,0 +1,1 @@
+Accurately transcribe the full text of the line from a document page. Return all of the text in the line in reading order. Return only the transcribed text. Use correct capitalization.

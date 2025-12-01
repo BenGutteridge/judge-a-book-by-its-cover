@@ -19,7 +19,7 @@ import time
 from collections import defaultdict
 
 
-def make_dummy_response():
+def make_dummy_response() -> dict:
     """Returns a dummy response dict for failed API calls so the next call can proceed."""
     return defaultdict(
         lambda: None,
@@ -31,6 +31,9 @@ def make_dummy_response():
                 "cached_tokens": 0,
             },
             "cost": 0.0,
+            "time": 0.0,
+            "failed_calls": [],
+            "dummy_response": True,
         },
     )
 
@@ -90,9 +93,8 @@ def gemma_json_call(
     # Build contents: Gemma has no system_instruction; put everything in prompt
     contents.insert(1, output_instructions)  # after system prompt but before user
 
-    attempt, wait = -1, 0
-    while attempt < max_retries:
-        attempt += 1
+    failed_calls, wait = [], 0
+    while len(failed_calls) < max_retries:
         time.sleep(wait)  # exponential backoff
         wait += 10
         try:
@@ -107,7 +109,7 @@ def gemma_json_call(
             err = _validate(obj, schema)
             if obj is None or err:
                 cfg_kwargs["temperature"] = min(
-                    max(0.3, cfg_kwargs["temperature"] + 0.1), 1.0
+                    max(0.3, cfg_kwargs["temperature"] + 0.2), 1.0
                 )
                 if cfg_kwargs["temperature"] > 0.5:
                     text_check = text.rstrip("\\n") + '"}'
@@ -123,13 +125,17 @@ def gemma_json_call(
                 raise ValueError(
                     f"Invalid JSON ('{err}'), raising temperature to {cfg_kwargs['temperature']}:\nInvalid output:\n{text}"
                 )
-            return obj, resp
+            return obj, resp, failed_calls
 
         except Exception as e:
             logger.warning(f"Gemma API call failed: {e}")
+            failed_calls.append(str(e))
+            if "RESOURCE_EXHAUSTED" in str(e):
+                time.sleep(60)
+                logger.info(f"Waiting...")
 
     # Need a dummy response
-    return None, None
+    return None, None, failed_calls
 
 
 def _extract_json(s: str) -> str:
@@ -141,7 +147,9 @@ def _extract_json(s: str) -> str:
     return m.group(0) if m else s.strip()
 
 
-def json_loads_safe(s: str) -> dict | None:
+def json_loads_safe(s: str, return_dummy: bool = False) -> dict | None:
+    if return_dummy:
+        return {}
     try:
         res = _extract_json(s)
         try:
@@ -198,12 +206,13 @@ def approximate_gemini_token_counter(
     prompts: list[str] = [],
     verbose: bool = False,
 ) -> int:
-
+    input_tokens = {}
     if isinstance(urls, dict):
         urls = list(urls.values())
-    image_tokens = sum(approx_gemini_image_token_counter(url) for url in urls)
-    prompt_tokens = gemini_token_counter(model=model, prompts=prompts)
-    total_tokens = image_tokens + prompt_tokens
+    input_tokens["image"] = sum(approx_gemini_image_token_counter(url) for url in urls)
+    input_tokens["text"] = gemini_token_counter(model=model, prompts=prompts)
+    total_tokens = input_tokens["image"] + input_tokens["text"]
+    input_tokens["total"] = total_tokens
     if verbose:
         api_token_count = gemini_token_counter(model=model, urls=urls, prompts=prompts)
         logger.info(
@@ -212,7 +221,7 @@ def approximate_gemini_token_counter(
             f"~{(total_tokens - api_token_count) / tokens_per_tile:.1f} image tiles"
         )
 
-    return total_tokens
+    return input_tokens
 
 
 def mllm_output_postprocessing(s: str | None) -> str | None:

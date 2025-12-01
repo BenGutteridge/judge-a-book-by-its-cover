@@ -1,0 +1,1 @@
+Recommend that Hall Oracles be implemented in Sigma

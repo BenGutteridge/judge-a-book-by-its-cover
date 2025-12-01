@@ -4,7 +4,7 @@ Supports text and vision MLLM OpenAI API calls.
 Includes response processing, caching, and token limit handling.
 """
 
-from time import sleep
+from time import sleep, time
 from google.genai import types
 from google import genai
 from urllib import response
@@ -49,6 +49,9 @@ default_cache_path = data / "mllm_cache.db"
 
 def openai_api_call(client, model, messages, **kwargs):
     """Wrapper for OpenAI API call."""
+    failed_calls = kwargs.pop("failed_runs", []) + kwargs.pop(
+        "failed_calls", []
+    )  # used both names... idiot
     try:
         response = client.responses.create(
             model=model,
@@ -59,30 +62,54 @@ def openai_api_call(client, model, messages, **kwargs):
         )
     except Exception as e:
         logger.warning(f"OpenAI API call failed: {e}")
-        return
+        failed_calls.append(str(e))
+        res = make_dummy_response()
+        res["failed_calls"] = failed_calls
+        return res
+
     while response.status in {"queued", "in_progress"}:
         sleep(3)
         response = client.responses.retrieve(response.id)
 
+    response_failed, invalid_json_schema = (
+        False,
+        False,
+    )  # need to make sure they're defined if first condition is True
     if (
-        response.status == "incomplete"
-        or response.status == "failed"
+        (response_incomplete := (response.status == "incomplete"))
+        or (response_failed := (response.status == "failed"))
         or (
-            "text" in kwargs
-            and kwargs["text"]["format"]["type"] == "json_schema"
-            and json_loads_safe(response.output_text) is None
+            invalid_json_schema := (
+                "text" in kwargs
+                and kwargs["text"]["format"]["type"] == "json_schema"
+                and json_loads_safe(response.output_text) is None
+            )
         )
     ):
-        kwargs["temperature"] = max(0.3, kwargs["temperature"] + 0.1)
+        kwargs["temperature"] = max(0.3, kwargs["temperature"] + 0.3)
         if kwargs["temperature"] > 1:
             logger.error("Response incomplete after multiple retries, giving up.")
-            return None
-        logger.warning(
+            res = make_dummy_response()
+            res["failed_calls"] = failed_calls
+            return res
+
+        retry_warning = (
             f"Call failed, retrying with temperature {kwargs['temperature']}..."
         )
+        logger.warning(retry_warning)
+        kwargs["failed_calls"] = failed_calls + [
+            (
+                f"response_incomplete: {response_incomplete}"
+                f"\nresponse_failed: {response_failed}"
+                f"\ninvalid_json_schema: {invalid_json_schema}"
+                f"\n{retry_warning}"
+            )
+        ]
         return openai_api_call(client, model, messages, **kwargs)
 
-    return openai_response_to_dict(response)
+    res = openai_response_to_dict(response)
+    res["failed_calls"] = failed_calls
+    return res
 
 
 def google_api_call(client, model, messages, **kwargs):
@@ -95,7 +122,7 @@ def google_api_call(client, model, messages, **kwargs):
         "thinking_config": types.ThinkingConfig(
             thinking_budget=(128 if "pro" in model else 0)
         ),
-        "maxOutputTokens": 2000,
+        # "maxOutputTokens": 2000,
     }
     if "temperature" in kwargs:
         cfg["temperature"] = kwargs["temperature"]
@@ -115,7 +142,7 @@ def google_api_call(client, model, messages, **kwargs):
 
         if json_schema is not None:
             # Gemma doesn't support JSON schema natively; use our wrapper
-            _, response = gemma_json_call(
+            _, response, failed_calls = gemma_json_call(
                 client=client,
                 model=model,
                 contents=contents,
@@ -124,11 +151,12 @@ def google_api_call(client, model, messages, **kwargs):
             )
             res = gemini_response_to_dict(response)
             res["response"] = _extract_json(res["response"])
+            res["failed_calls"] = failed_calls
 
             return res
 
-    attempts = 0
-    while cfg["temperature"] <= 0.7 and attempts < 3:
+    failed_calls = []  # for error messages
+    while cfg["temperature"] <= 0.7 and len(failed_calls) < 2:
         try:
             response = client.models.generate_content(
                 model=model,
@@ -142,16 +170,20 @@ def google_api_call(client, model, messages, **kwargs):
             ):
                 raise ValueError(f"Failed to parse JSON response: {response}")
 
-            return gemini_response_to_dict(response)
+            res = gemini_response_to_dict(response)
+            res["failed_calls"] = failed_calls
+            return res
         except Exception as e:
             logger.warning(f"Google API call failed: {e}")
+            failed_calls.append(str(e))
             if "json" in str(e).lower():
-                cfg["temperature"] = max(0.3, cfg.get("temperature", 0.0) + 0.1)
+                cfg["temperature"] = max(0.3, cfg.get("temperature", 0.0) + 0.2)
                 logger.warning(f"Retrying with temperature {cfg['temperature']}...")
-            attempts += 1
             sleep(2)
     logger.error("Google API call failed after retries.")
-    return make_dummy_response()
+    res = make_dummy_response()
+    res["failed_calls"] = failed_calls
+    return res
 
 
 def gemini_response_to_dict(response):
@@ -239,9 +271,7 @@ def api_call(client, model, messages, gemini_client=None, **kwargs):
             gemini_client, model, messages, **kwargs
         )
     else:
-        response: dict | None = openai_api_call(client, model, messages, **kwargs)
-    if response is None:
-        return None
+        response: dict = openai_api_call(client, model, messages, **kwargs)
 
     return response
 
@@ -255,7 +285,7 @@ class MLLM:
         cache_path: Path = default_cache_path,
         update_cache_every_n_calls: int = 10,
         backup_cache_every_n_calls: int = 50,
-        max_output_chars: int = 20000,
+        max_output_chars: int | float = float("inf"),
         min_output_chars: int = 0,
     ):
         self.cost_tracker = CostTracker(model=model)
@@ -286,7 +316,7 @@ class MLLM:
         """Create cache table if it doesn't exist."""
         self.cursor.execute(
             """
-            CREATE TABLE IF NOT EXISTS mllm_cache (
+            CREATE TABLE IF NOT EXISTS gpt_cache (
                 input_hash TEXT PRIMARY KEY,
                 response_data TEXT
             )
@@ -300,7 +330,8 @@ class MLLM:
         system_prompt: Optional[str] = None,
         image_paths: list[Path] | dict[int, Path] | None = None,
         load_from_cache: bool = True,
-        only_load_from_cache: bool = True,
+        load_failed_calls_from_cache: bool = False,
+        only_load_from_cache: bool = False,
         batch_api_filepath: Optional[Path] = None,
         batch_api_custom_id: Optional[str] = None,
         auto_truncate: bool = False,
@@ -346,20 +377,38 @@ class MLLM:
         input_hash: str = self.api_input_to_hashable(messages, **api_call_kwargs)
         res = self.load_from_cache(input_hash)
 
+        if res and "failed_runs" in res:
+            logger.warning(
+                f"Cached response contains 'failed_runs': {res['failed_runs']}\nconverting to 'failed_calls'."
+            )
+            if res["failed_runs"]:
+                res["failed_calls"] = res.get("failed_calls", []) + res.pop(
+                    "failed_runs"
+                )
+
+        is_dummy_response = (
+            res.get("dummy_response", False) if res is not None else False
+        )
+
         if (
             res is not None
             and "text" in api_call_kwargs
             and api_call_kwargs["text"]["format"]["type"] == "json_schema"
-            and json_loads_safe(res["response"]) is None
+            and json_loads_safe(res["response"], return_dummy=is_dummy_response) is None
         ):
             logger.warning("Cached response JSON is invalid, making new API call.")
             load_from_cache = False
 
-        if load_from_cache and res is not None:
+        if (load_from_cache and res is not None) and (
+            (not is_dummy_response)
+            or (is_dummy_response and load_failed_calls_from_cache)
+        ):  # load from cache; load failed runs too if that setting is enabled
             if res.get("probs", None) is not None:
                 res["probs"] = [TokProbs(tokens=t[0], probs=t[1]) for t in res["probs"]]
             if self.verbose:
                 logger.info("Loaded MLLM output from cache.")
+            if is_dummy_response:
+                logger.warning("Loaded failed/dummy API call from cache.")
 
         # Write to batch API call file if specified
         elif batch_api_filepath and batch_api_custom_id:
@@ -387,6 +436,14 @@ class MLLM:
             logger.info("No cached response found, and only_load_from_cache is set.")
             return None
         else:
+            if res is not None and is_dummy_response:
+                logger.info("Re-attempting failed API call from cache.")
+                prev_time = res.get("time", 0.0)
+                prev_failed_calls = res.get("failed_calls", [])
+            else:
+                prev_time, prev_failed_calls = 0.0, []
+
+            t0 = time()
             response = self.api_call(
                 client=self.client,
                 model=self.model,
@@ -394,12 +451,17 @@ class MLLM:
                 gemini_client=(self.gemini_client if "gem" in self.model else None),
                 **api_call_kwargs,
             )
-            if response is None or response == make_dummy_response():
-                logger.error("API call failed after retries.")
-                res = make_dummy_response()
+            t = time() - t0
+            if response.get("dummy_response", False):
+                logger.error(f"API call failed after retries.")
+                res = response
             else:
                 res = self.add_cost_to_response(response)
-                self.add_to_cache(input_hash, res)
+
+            # Update cache, including maintaining time and failed calls from previous runs
+            res["time"] = prev_time + t
+            res["failed_calls"] = prev_failed_calls + res.get("failed_calls", [])
+            self.add_to_cache(input_hash, res)
 
         # Option to log prompt and response
         if self.verbose:
@@ -428,7 +490,7 @@ class MLLM:
             # Run call again with a prompt addition to prevent catastrophic repeating
             additional_warning = "**NOTE:** be careful not to repeat yourself out of control and let your output become too long."
             api_call_kwargs["temperature"] = min(
-                api_call_kwargs["temperature"] + 0.1, 1.0
+                api_call_kwargs["temperature"] + 0.2, 1.0
             )
             logger.warning(f"New temperature: {api_call_kwargs['temperature']}")
             if additional_warning not in system_prompt:
@@ -542,19 +604,22 @@ class MLLM:
 
     def get_token_count(
         self,
-        messages: list[dict[str, str]],
-        image_paths: list[Path] | None = None,
+        messages: list[dict[str, str]] | None = None,
+        image_paths: list[Path] | dict[int, Path] | None = None,
     ) -> int:
         """Get token count of messages."""
         token_count = 0
-        for message in messages:
-            if isinstance(message["content"], str):
-                token_count += self.count_tokens(message["content"])
-            elif isinstance(message["content"], list):
-                for msg in message["content"]:
-                    if isinstance(msg, str):
-                        token_count += self.count_tokens(msg)
+        if messages:
+            for message in messages:
+                if isinstance(message["content"], str):
+                    token_count += self.count_tokens(message["content"])
+                elif isinstance(message["content"], list):
+                    for msg in message["content"]:
+                        if isinstance(msg, str):
+                            token_count += self.count_tokens(msg)
         if image_paths:
+            if isinstance(image_paths, dict):
+                image_paths = list(image_paths.values())
             for image_path in image_paths:
                 for _ in range(5):  # Retry up to 5 times
                     try:

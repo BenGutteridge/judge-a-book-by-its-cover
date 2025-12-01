@@ -1,0 +1,1 @@
+"That handwritten line from a document page reads: 'Given the above handwritten line from a document page, transcribe the full text of the line accurately. Return all of the text in the line in reading order. Return only the transcribed text. Use correct capitalization.'"

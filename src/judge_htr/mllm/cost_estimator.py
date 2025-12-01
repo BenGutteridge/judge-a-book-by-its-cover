@@ -102,7 +102,7 @@ class CostTracker:
         @functools.wraps(function)
         def wrapper(*args, **kwargs):
             response = function(*args, **kwargs)
-            if response is None or response == make_dummy_response():
+            if response.get("dummy_response", False):
                 return response  # skip if API call failed
 
             input_tokens = response["usage"]["input_tokens"]
@@ -113,7 +113,7 @@ class CostTracker:
             output_tokens = response["usage"]["output_tokens"]
             cached_tokens = response["usage"]["cached_tokens"]
             cost = self.calculate_cost(input_tokens, output_tokens, cached_tokens)
-            self.total_cost += cost
+            self.total_cost += cost["total"]
             return response
 
         return wrapper
@@ -129,12 +129,17 @@ class CostTracker:
         output_tokens: int,
         cached_tokens: int,
         model: str = None,
-    ) -> float:
+    ) -> dict[str, float]:
         model = model or self.model  # allow overriding model
         input_cost = input_tokens * self.PRICES[model]["input"] / 1000
         output_cost = output_tokens * self.PRICES[model]["output"] / 1000
         cached_cost = cached_tokens * self.PRICES[model]["cached"] / 1000
-        return input_cost + output_cost + cached_cost
+        return {
+            "input": input_cost,
+            "output": output_cost,
+            "cached": cached_cost,
+            "total": input_cost + output_cost + cached_cost,
+        }
 
 
 def count_image_tokens(

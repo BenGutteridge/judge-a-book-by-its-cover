@@ -1,0 +1,1 @@
+This is a declaration that the document is written in a right to left direction.

@@ -1,0 +1,1 @@
+THE PARAGRAPH IS: "What is the first word in the second line of the paragraph? Transcribe the full text of the line accurately. Return all of the text in the line in reading order. Return only the transcribed text. Use correct capitalization."
