@@ -1,0 +1,1 @@
+The handwritten line is: "In order to determine the average number of characters per line, we need to count the characters in each line of the document."

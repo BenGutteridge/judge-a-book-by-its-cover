@@ -1,0 +1,2 @@
+The handwritten line from a document page is:
+"What is the difference between Encoding and Decoding?\n\nEncoding is the process of converting a message into a code that can be transmitted, while Decoding is the process of converting a code back into a message.\n\nFor example, in Morse code, the letter 'a' is represented by a series of dots and dashes. When transmitting this message, the message is converted into this series of dots and dashes. When the message is received, it is decoded back into the letter 'a

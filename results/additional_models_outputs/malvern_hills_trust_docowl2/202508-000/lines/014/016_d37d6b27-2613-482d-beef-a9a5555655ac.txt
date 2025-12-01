@@ -1,0 +1,1 @@
+"What is the capitalized first letter of the first word in the line?"
