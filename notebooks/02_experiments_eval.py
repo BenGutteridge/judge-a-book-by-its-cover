@@ -46,7 +46,6 @@ run_filepaths_all = {
         results / "bentham_multipage_consecutive_gpt-4o_split=1.00_seed=00.pkl",
         results / "bentham_multipage_consecutive_gemma-3-27b-it_split=1.00_seed=00.pkl",
     ],
-    # Rebuttals
     "mhills_5p+": [
         results_dir
         / "malvern_hills_multipage_min_5p_gemini-2.5-pro_split=1.00_seed=00.pkl",
