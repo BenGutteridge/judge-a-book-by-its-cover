@@ -3,19 +3,19 @@
 
 # # # # For IAM dataset
 # task = "iam_multipage_minpages=02"
-# task = "iam_multipage_random_exactpages=05" # rebuttal
-# task = "iam_multipage_exactpages=05" # rebuttal
+# task = "iam_multipage_random_exactpages=05"
+# task = "iam_multipage_exactpages=05"
 
 # For Malvern-Hills dataset
 # task = "malvern_hills_multipage"
-# task = "malvern_hills_multipage_min_5p" # rebuttal
-# task = "malvern_hills_multipage_min_10p" # rebuttal
+# task = "malvern_hills_multipage_min_5p"
+# task = "malvern_hills_multipage_min_10p"
 
 # # For Bentham dataset
 # task = "bentham_multipage_consecutive"
 
 # # For CASIA dataset
-# task = "casia_multipage" # rebuttal
+# task = "casia_multipage"
 
 # %% [markdown]
 # ## Setup
