@@ -60,12 +60,30 @@ args = {
     k: v for k, v in zip(sys.argv[1::2], sys.argv[2::2])
 }  # command line args - override config/defaults
 
-task = args.get("task", task)
+# `task` may be set via CLI arg or (in interactive use) an uncommented line above.
+# Use globals() fallback so running as a plain script with `task <name>` works.
+task = args.get("task", globals().get("task"))
 cfg = dict(OmegaConf.load(configs_dir / f"{task}.yaml")) | args
 logger.info("\n" + OmegaConf.to_yaml(cfg))
 
 # Import correct task-specific prompts
 from judge_htr.prompts import prompts
+
+# Variance-analysis option: restrict to a subset of methods by dropping prompt keys.
+# only_pagex True  → keeps page1, choose_page_id, pageN
+# keep_methods vision-pbp,all-pages-pbp → keeps exactly those prompt keys (comma-separated)
+_keep = str(cfg.get("keep_methods", "")).strip()
+_only_pagex = str(cfg.get("only_pagex", "")).lower() in {"true", "1", "yes"}
+if _keep:
+    _keep_keys = {k.strip() for k in _keep.split(",")}
+    for _k in list(prompts.keys()):
+        if _k not in _keep_keys:
+            prompts.pop(_k, None)
+    logger.info(f"keep_methods set: restricted to {_keep_keys}.")
+elif _only_pagex:
+    for _k in ("vision-pbp", "vision", "ocr-pbp", "all-pages-pbp"):
+        prompts.pop(_k, None)
+    logger.info("only_pagex set: restricted to page1/pageN methods.")
 
 
 # OCR costs $ / doc
@@ -94,6 +112,14 @@ api_call_kwargs = {
     # "load_from_cache": False,
     "load_failed_calls_from_cache": True,
 }
+_api_seed = int(cfg.get("api_seed", 0))
+if _api_seed:
+    # API seed for variance analysis: forwarded into the Gemini/Gemma call AND part of the
+    # cache key, so distinct api_seed values make genuine fresh calls (no manual cache reset).
+    # Independent of the dataset-sampling `seed` (kept fixed so the doc set is identical).
+    # Only added when explicitly set, so the default dict (and its cache-key hash) is
+    # byte-identical to before for any run that doesn't opt into the variance analysis.
+    api_call_kwargs["seed"] = _api_seed
 
 
 # %% [markdown]
@@ -141,6 +167,12 @@ for ocr_engine in ocr_engines:
 
 # Set up output files and batch API files if necessary
 output_filename = f"{task}_{model}_split={split:.2f}_seed={seed:02d}"
+_api_seed = int(cfg.get("api_seed", 0))
+if _api_seed != 0:  # keep original filenames untouched when api_seed unused
+    output_filename += f"_apiseed={_api_seed:02d}"
+_run_label = str(cfg.get("run_label", "")).strip()
+if _run_label:
+    output_filename += f"_{_run_label}"
 if cfg["batch_api"]:
     batch_api_dir = data / "batch_api"
     batch_api_dir.mkdir(exist_ok=True)
@@ -387,7 +419,7 @@ field_defaults = {
 
 def get_fields_per_mode(mode: str) -> list[str]:
     """Get list of expected dataframe fields for a given mode."""
-    return ["mode"] + [mode + "_" + field for field in field_defaults.keys()]
+    return [mode] + [mode + "_" + field for field in field_defaults.keys()]
 
 
 def tuple_from_run_data(run_data: dict[str, int | float | str]) -> tuple:
@@ -667,7 +699,10 @@ def choose_page_id(
     )
 
     run_data = {
-        "page_id": page_id,
+        # NB: must be "output" (not "page_id") — tuple_from_run_data reads run_data["output"]
+        # and it becomes the `{ocr_engine}_page_id` column (the chosen page int). Without this,
+        # PAGEN fails with KeyError on any fresh (cache-miss) call.
+        "output": page_id,
         "reasoning": reasoning,
         "input_cost": costs["input"],
         "output_cost": costs["output"],
@@ -696,10 +731,39 @@ def extract_from_row(row: pd.Series) -> tuple[str, float]:
     return tuple_from_run_data(run_data)
 
 
+reuse_page_id_cfg = str(cfg.get("reuse_page_id", "")).strip()
 for ocr_engine in ocr_engines:
     mode = f"{ocr_engine}_page_id"
     if "choose_page_id" not in prompts:
         logger.warning(f"\n\nNo prompt found for {mode}. Skipping this mode.")
+        continue
+    if reuse_page_id_cfg:
+        # The upstream page-selector model (`gemma-3-27b-it`) is no longer served by the
+        # Gemini API (404). For the variance study we reuse the paper's chosen page from a
+        # reference run, reproducing PAGEN's page choice exactly and isolating the Gemini
+        # correction's run-to-run variance (the quantity the reviewer asked about).
+        ref_path = (
+            results / f"{task}_{model}_split={split:.2f}_seed={seed:02d}.pkl"
+            if reuse_page_id_cfg.lower() == "auto"
+            else Path(reuse_page_id_cfg)
+        )
+        ref = pd.read_pickle(ref_path)
+        if mode in ref.columns:
+            chosen = ref[mode].reindex(df.index)
+        else:
+            chosen = pd.Series(index=df.index, dtype="float64")
+        chosen = chosen.fillna(df["page_id"].apply(lambda x: x[0]))  # fallback: first page
+        df[mode] = chosen.astype(int)
+        # zero-cost bookkeeping columns (no page-select API call was made)
+        df[f"{mode}_input_cost"] = 0.0
+        df[f"{mode}_output_cost"] = 0.0
+        df[f"{mode}_input_img_tokens"] = 0
+        df[f"{mode}_input_txt_tokens"] = 0
+        df[f"{mode}_output_tokens"] = 0
+        df[f"{mode}_failed_calls"] = [[] for _ in range(len(df))]
+        df[f"{mode}_time"] = 0.0
+        df[f"{mode}_dummy_response"] = False
+        logger.info(f"Reused page_id choices for {mode} from {ref_path.name}.")
         continue
     logger.info(f"\n\nProcessing {mode}...")
     df[get_fields_per_mode(mode)] = df.progress_apply(
@@ -816,7 +880,12 @@ for ocr_engine in ocr_engines:
     if not ocr_engine.endswith("_ocr"):
         continue
     for field, default_value in field_defaults.items():
-        df[f"{ocr_engine}_{field}"] = default_value
+        # list defaults (e.g. failed_calls=[]) can't be broadcast-assigned to a non-empty
+        # frame in modern pandas; replicate per-row instead.
+        if isinstance(default_value, list):
+            df[f"{ocr_engine}_{field}"] = [list(default_value) for _ in range(len(df))]
+        else:
+            df[f"{ocr_engine}_{field}"] = default_value
     # OCR costs
     df[ocr_engine + "_ocr_cost"] = df[ocr_engine].apply(
         lambda x: len(x) * ocr_costs[ocr_engine]

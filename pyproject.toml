@@ -2,6 +2,7 @@
 name = "judge_htr"
 description = "Code repo for 'Judge a book by its cover' paper"
 readme = "README.md"
+license = {file = "LICENSE"}
 dynamic = ["version"]
 requires-python = ">=3.9"
 

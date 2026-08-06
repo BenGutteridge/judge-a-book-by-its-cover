@@ -21,6 +21,8 @@ __pycache__/
 
 build/
 
-.DS_Store # pixi environments
+.DS_Store
+
+# pixi environments
 .pixi/*
 !.pixi/config.toml
