@@ -1,6 +1,6 @@
 # Judge a Book by Its Cover: Investigating Multi-Modal LLMs for Multi-Page Handwritten Document Transcription
 
-Code for reproducing experiments in the paper "Judge a Book by its Cover: Investigating Multi-Modal LLMs for Multi-Page Handwritten Document Transcription", submitted to COLM 2026.
+Code for reproducing experiments in the paper "Judge a Book by its Cover: Investigating Multi-Modal LLMs for Multi-Page Handwritten Document Transcription", accepted to COLM 2026.
 
 ### Installation
 For Unix:
@@ -26,7 +26,7 @@ The **Malvern-Hills** dataset (with cropped lines and metadata) can be downloade
 
 The **CASIA** dataset can be downloaded [here](https://nlpr.ia.ac.cn/databases/Download/Offline/TextlineData/HWDB2.1Test.zip) and pre-processed with `notebooks/00_casia_preprocessing.py`.
 
-All cached LLM results can be downloaded from [here](https://judgeocr.s3.eu-north-1.amazonaws.com/gpt_cache_dbs_26-03.zip) as SQLite DBs. Unzip the .db files into `data/` and all LLM calls in notebooks/01_experiments.py should use cached results. If you start to see costs and API calls being logged to the cache, you aren't using the caches; check your filepaths. By default, the `only_load_from_cache` argument of  is set to True; change it
+All cached LLM results can be downloaded from [here](https://judgeocr.s3.eu-north-1.amazonaws.com/gpt_cache_dbs_26-03.zip) as SQLite DBs. Unzip the .db files into `data/` and all LLM calls in notebooks/01_experiments.py should use cached results. If you start to see costs and API calls being logged to the cache, you aren't using the caches; check your filepaths. By default, the `only_load_from_cache` argument of `MLLM.call()` (`src/judge_htr/mllm/caller.py`) is `False`; set it to `True` if you want to guarantee no API calls are made and only cached responses are returned.
 
 
 ### Running Experiments
@@ -35,7 +35,8 @@ Experimental results can be reproduced with the notebooks below as follows:
 - `notebooks/01_experiments.py`: make OpenAI API calls with various prompting strategies to get improved OCR transcriptions
   - Can be run as a notebook or using command line arguments with .yaml config files in `configs/`
 - `notebooks/additional_models/`: experiments for TrOCR, PyLaia and DocOwl2
-- `notebooks/02_mhills_ablations.py`: Malvern-Hills ablations
+- `notebooks/02_mhills_ablation.py`: Malvern-Hills ablations
+- `notebooks/03_variance_analysis.py`: variance-across-API-seeds analysis (camera-ready Appendix C.4) — see [Variance analysis](#variance-analysis) below
 
 ### Commands to run all exps
 ```
@@ -81,3 +82,31 @@ python notebooks/02_experiments_eval.py
 - Though we use a seed, OpenAI and Gemini API calls are [not strictly reproductible](https://platform.openai.com/docs/advanced-usage#reproducible-outputs), so slight differences in output are possible
 - For a few API calls the model failed to return valid JSON, so nothing was cached. In these cases, an 'API CALL FAILED' error will show, but this is expected; the returned output is empty, the transcription is evaluated as failed.
 - All prompts used for experiments can be found in `configs/prompts.json`
+
+### Variance analysis
+
+Camera-ready Appendix C.4 repeats a subset of methods (`gemini-2.5-pro`, `OCR+PAGE1`/`OCR+PAGEN` on `IAM`/`Malvern-Hills`, plus `IMAGES`/`OCR+IMAGES` on `Malvern-Hills`) across 3 additional API seeds, to test whether single-run, temperature-zero evaluation is reliable. `notebooks/01_experiments.py` supports this via three extra CLI overrides:
+- `api_seed <int>`: forwarded into the model call (and the cache key), so a different value triggers a genuine fresh API call rather than a cache hit. Output filenames get an `_apiseed=NN` suffix.
+- `only_pagex true` / `keep_methods <comma-separated prompt keys>`: restrict the run to a subset of prompting strategies (e.g. `keep_methods vision-pbp,all-pages-pbp` for `IMAGES`/`OCR+IMAGES` only).
+- `reuse_page_id auto` (or a path to a specific `.pkl`): for `OCR+PAGEN`, reuse the page selections from a reference run instead of making fresh page-selection calls. This is necessary because the original upstream page-selector model, `gemma-3-27b-it`, is no longer served by the Gemini API (404) — reusing the seed-0 selections isolates exactly the correction-call variance the analysis is testing for, rather than conflating it with a different (unavailable) selector model.
+
+Example invocation for one seed:
+```
+python notebooks/01_experiments.py task malvern_hills_multipage model gemini-2.5-pro api_seed 1 only_pagex true run_label pagex reuse_page_id auto
+```
+Repeat for `api_seed 2`, `api_seed 3`, and the `IAM`/`IMAGES`+`OCR+IMAGES` variants (see `DATASETS`/`modes_for` in `notebooks/03_variance_analysis.py` for the exact task/split/run_label combinations expected), then run:
+```
+python notebooks/03_variance_analysis.py
+```
+to produce the per-seed CER, means and 95% confidence intervals reported in Appendix C.4.
+
+### Citation
+
+```bibtex
+@inproceedings{gutteridge2026judge,
+  title     = {Judge a Book by Its Cover: Investigating Multi-Modal {LLM}s for Multi-Page Handwritten Document Transcription},
+  author    = {Gutteridge, Benjamin and Jackson, Matthew and Kukurin, Toni and Dong, Xiaowen},
+  booktitle = {Conference on Language Modeling (COLM)},
+  year      = {2026}
+}
+```
