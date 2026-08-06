@@ -109,13 +109,17 @@ mllm = MLLM(
 api_call_kwargs = {
     "top_logprobs": 5,
     "temperature": 0,
-    # API seed for variance analysis: forwarded into the Gemini/Gemma call AND part of the
-    # cache key, so distinct api_seed values make genuine fresh calls (no manual cache reset).
-    # Independent of the dataset-sampling `seed` (kept fixed so the doc set is identical).
-    "seed": int(cfg.get("api_seed", 0)),
     # "load_from_cache": False,
     "load_failed_calls_from_cache": True,
 }
+_api_seed = int(cfg.get("api_seed", 0))
+if _api_seed:
+    # API seed for variance analysis: forwarded into the Gemini/Gemma call AND part of the
+    # cache key, so distinct api_seed values make genuine fresh calls (no manual cache reset).
+    # Independent of the dataset-sampling `seed` (kept fixed so the doc set is identical).
+    # Only added when explicitly set, so the default dict (and its cache-key hash) is
+    # byte-identical to before for any run that doesn't opt into the variance analysis.
+    api_call_kwargs["seed"] = _api_seed
 
 
 # %% [markdown]
